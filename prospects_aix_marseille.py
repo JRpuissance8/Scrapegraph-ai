@@ -38,13 +38,18 @@ MAX_PAGES = 400     # l'API plafonne a 10 000 resultats par recherche
 
 def get(params, tentatives=5):
     for i in range(tentatives):
-        r = requests.get(URL, params=params, timeout=30)
-        if r.status_code == 429:
+        try:
+            r = requests.get(URL, params=params, timeout=30)
+        except (requests.ConnectionError, requests.Timeout) as err:
+            print(f"  erreur reseau ({type(err).__name__}), nouvel essai {i + 1}/{tentatives}")
+            time.sleep(2 ** (i + 1))
+            continue
+        if r.status_code == 429 or r.status_code >= 500:
             time.sleep(2 * (i + 1))
             continue
         r.raise_for_status()
         return r.json()
-    raise RuntimeError("Trop de 429, ralentir ou reessayer plus tard")
+    raise RuntimeError("Echec apres plusieurs essais (reseau, 429 ou 5xx), reessayer plus tard")
 
 
 def recherche(naf, communes, effectif):
@@ -117,13 +122,17 @@ def main():
     lignes = []
     for naf in NAF:
         n = 0
-        for e in recherche(naf, args.communes, args.effectif):
-            siren = e.get("siren")
-            if siren in vus:
-                continue
-            vus.add(siren)
-            lignes.append(ligne(e, naf))
-            n += 1
+        try:
+            for e in recherche(naf, args.communes, args.effectif):
+                siren = e.get("siren")
+                if siren in vus:
+                    continue
+                vus.add(siren)
+                lignes.append(ligne(e, naf))
+                n += 1
+        except (RuntimeError, requests.RequestException) as err:
+            print(f"{naf} {NAF[naf]} : interrompu apres {n} entreprises ({err})")
+            continue
         print(f"{naf} {NAF[naf]} : {n} entreprises")
 
     if not lignes:

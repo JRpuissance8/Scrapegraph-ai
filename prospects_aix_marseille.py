@@ -80,7 +80,24 @@ def recherche(naf, communes, effectif):
         time.sleep(0.2)  # reste sous la limite de 7 requetes/seconde
 
 
-def ligne(e, naf):
+def etablissement_local(e, communes):
+    """Etablissement actif dans la zone demandee, sinon le siege.
+
+    Avec --communes, l'API renvoie aussi les entreprises dont le siege est
+    ailleurs (Paris, Nimes...) : l'adresse utile est celle de l'etablissement
+    local, dans matching_etablissements. None si aucun n'est encore ouvert.
+    """
+    siege = e.get("siege") or {}
+    locaux = [m for m in e.get("matching_etablissements") or []
+              if m.get("etat_administratif") == "A"]
+    if communes:
+        codes = set(communes.split(","))
+        locaux = [m for m in locaux if m.get("commune") in codes] or locaux
+        return locaux[0] if locaux else None
+    return siege
+
+
+def ligne(e, naf, etab):
     siege = e.get("siege") or {}
     dirigeants = e.get("dirigeants") or []
     gerant = ""
@@ -90,20 +107,24 @@ def ligne(e, naf):
         prenoms = d.get("prenoms")
         if prenoms:
             gerant = f"{prenoms} {gerant}"
+    enseignes = etab.get("liste_enseignes") or []
     return {
         "siren": e.get("siren"),
+        "siret": etab.get("siret"),
         "nom": e.get("nom_complet"),
+        "enseigne": etab.get("nom_commercial") or ", ".join(enseignes),
         "secteur": NAF.get(naf, naf),
         "naf": e.get("activite_principale"),
         "effectif_tranche": e.get("tranche_effectif_salarie"),
-        "adresse": siege.get("adresse"),
-        "code_postal": siege.get("code_postal"),
-        "commune": siege.get("libelle_commune"),
-        "latitude": siege.get("latitude"),
-        "longitude": siege.get("longitude"),
+        "adresse": etab.get("adresse"),
+        "code_postal": etab.get("code_postal"),
+        "commune": etab.get("libelle_commune"),
+        "latitude": etab.get("latitude"),
+        "longitude": etab.get("longitude"),
+        "siege": "" if etab.get("est_siege") else siege.get("adresse"),
         "dirigeant": gerant.strip(),
         "date_creation": e.get("date_creation"),
-        "site_web": "",  # a completer a l'etape 2 (scraping des sites)
+        "site_web": "",  # rempli par prospects_contacts.py (etape 2)
         "email": "",
         "telephone": "",
     }
@@ -127,8 +148,11 @@ def main():
                 siren = e.get("siren")
                 if siren in vus:
                     continue
+                etab = etablissement_local(e, args.communes)
+                if etab is None:
+                    continue  # etablissement local ferme
                 vus.add(siren)
-                lignes.append(ligne(e, naf))
+                lignes.append(ligne(e, naf, etab))
                 n += 1
         except (RuntimeError, requests.RequestException) as err:
             print(f"{naf} {NAF[naf]} : interrompu apres {n} entreprises ({err})")

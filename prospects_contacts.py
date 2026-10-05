@@ -268,9 +268,20 @@ def enrichir(p):
         tel = lieu.get("nationalPhoneNumber", "")
         email, niveau = "", "google"
         if site and not exclu(site):
-            textes = pages_site(site)
+            # Une URL avec chemin est souvent la page d'une concession sur le site
+            # national de la marque : on ne lit que cette page, et on ne garde un
+            # email que s'il est sur le meme domaine (sinon adresse nationale).
+            page_marque = urlparse(site).path.strip("/") != ""
+            if page_marque:
+                t = telecharger(site)
+                textes = {site: t} if t else {}
+            else:
+                textes = pages_site(site)
             if textes:
                 email, tel_site = extraire(textes, site)
+                if page_marque and email and \
+                        not domaine(site).endswith(email.split("@")[1]):
+                    email = ""
                 tel = tel or tel_site
                 if confiance(textes, p) == "siren":
                     niveau = "google+siren"

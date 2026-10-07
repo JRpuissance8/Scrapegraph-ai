@@ -1,5 +1,6 @@
 """
-Parcelles cadastrales detenues par la Metropole d'Aix-Marseille-Provence.
+Parcelles cadastrales d'un proprietaire public des Bouches-du-Rhone
+(Metropole d'Aix-Marseille-Provence ou Departement).
 
 Sources (open data, sans cle) :
   - DGFiP, "Fichiers des parcelles des personnes morales" (data.economie.gouv.fr) :
@@ -7,19 +8,26 @@ Sources (open data, sans cle) :
   - cadastre Etalab (cadastre.data.gouv.fr) : contour de la parcelle, d'ou le
     centroide (latitude / longitude) et les liens cartes.
 
-Proprietaires retenus :
-  - la Metropole (SIREN 200054807) et ses identifiants DGFiP sans SIREN ("U...") ;
-  - les intercommunalites fusionnees dans la Metropole au 1er janvier 2016
-    (colonne statut = "ex-EPCI") : le cadastre n'a pas toujours ete mis a jour,
-    mais ces biens appartiennent desormais a la Metropole.
+Proprietaires retenus (--proprietaire) :
+  metropole :
+    - la Metropole (SIREN 200054807) et ses identifiants DGFiP sans SIREN ("U...") ;
+    - les intercommunalites fusionnees dans la Metropole au 1er janvier 2016
+      (statut "ex-EPCI") : le cadastre n'a pas toujours ete mis a jour,
+      mais ces biens appartiennent desormais a la Metropole.
+  departement :
+    - les parcelles inscrites au nom de la Direction des Routes du Departement
+      (statut "Direction des Routes") ;
+    - les autres parcelles du Departement (SIREN 221300015, ancien Conseil
+      general) : le cadastre ne precise pas le service gestionnaire.
 
 Seules les personnes morales figurent dans ce fichier DGFiP : c'est suffisant ici.
 
 Usage :
     pip install requests
-    python parcelles_metropole.py
-    python parcelles_metropole.py --sans-geo          # sans le cadastre Etalab
-    python parcelles_metropole.py --zip pm2025.zip    # zip DGFiP deja telecharge
+    python parcelles_proprietaire.py                            # Metropole
+    python parcelles_proprietaire.py --proprietaire departement
+    python parcelles_proprietaire.py --sans-geo                 # sans le cadastre Etalab
+    python parcelles_proprietaire.py --zip pm2025.zip           # zip DGFiP deja telecharge
 """
 
 import argparse
@@ -31,7 +39,7 @@ import os
 import re
 import time
 import zipfile
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 
 import requests
 
@@ -57,6 +65,21 @@ EX_EPCI = {
     "241300268": "CA du Pays d'Aubagne et de l'Etoile",
 }
 RE_METROPOLE = re.compile(r"METROPOLE D.?AIX.?MARSEILLE.?PROVENCE")
+
+# Par proprietaire : (statut, identifiants DGFiP, motif sur la denomination),
+# du plus precis au plus general. Une parcelle prend le premier statut trouve.
+PROFILS = {
+    "metropole": [
+        ("Metropole", {METROPOLE}, RE_METROPOLE),
+        ("ex-EPCI", set(EX_EPCI), None),
+    ],
+    "departement": [
+        ("Direction des Routes", {"U12553701"},
+         re.compile(r"DEPARTEMENT DES BOUCHES DU RHONE.*ROUTES")),
+        ("Departement", {"221300015"},
+         re.compile(r"^(DEPARTEMENT|CONSEIL GENERAL|CONSEIL DEPARTEMENTAL) DES BOUCHES DU RHONE$")),
+    ],
+}
 
 # Colonnes du fichier DGFiP 2025 (l'entete contient deux "Contenance").
 DEP, DIR, COM, NOM_COM, PREFIXE, SECTION, PLAN, VOIRIE, INDICE = range(9)
@@ -93,13 +116,12 @@ def lire_dgfip(chemin_zip):
     return lignes[1:]
 
 
-def statut(ligne):
-    siren = ligne[SIREN]
-    if siren == METROPOLE or RE_METROPOLE.search(ligne[DENOMINATION]):
-        return "Metropole"
-    if siren in EX_EPCI:
-        return "ex-EPCI"
-    return ""
+def statut(ligne, profil):
+    """(rang, statut) du premier critere du profil verifie par la ligne."""
+    for rang, (nom, ids, motif) in enumerate(profil):
+        if ligne[SIREN] in ids or (motif and motif.search(ligne[DENOMINATION].strip())):
+            return rang, nom
+    return None, ""
 
 
 def insee(ligne):
@@ -118,11 +140,11 @@ def adresse(ligne):
     return " ".join(x for x in (numero, voie) if x)
 
 
-def parcelles(lignes):
+def parcelles(lignes, profil=PROFILS["metropole"]):
     """Une ligne par parcelle (le fichier DGFiP a une ligne par subdivision et par droit)."""
     res = OrderedDict()
     for lg in lignes:
-        st = statut(lg)
+        rang, st = statut(lg, profil)
         if not st:
             continue
         cle = idu(lg)
@@ -137,12 +159,13 @@ def parcelles(lignes):
             "contenance_m2": int(lg[CONTENANCE] or 0),
             "natures_culture": [],
             "statut": st,
+            "rang": rang,
             "titulaire_cadastre": [],
             "siren_titulaire": [],
             "droit": [],
         })
-        if st == "Metropole":
-            p["statut"] = "Metropole"
+        if rang < p["rang"]:
+            p["rang"], p["statut"] = rang, st
         culture = lg[CULTURE].split(" - ", 1)[-1]
         if culture and culture not in p["natures_culture"]:
             p["natures_culture"].append(culture)
@@ -207,13 +230,15 @@ def geolocaliser(liste, dossier_cache):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument("--proprietaire", choices=sorted(PROFILS), default="metropole")
     ap.add_argument("--zip", default="parcelles_pm_2025.zip", help="zip DGFiP (telecharge si absent)")
-    ap.add_argument("--sortie", default="parcelles_metropole_amp.csv")
+    ap.add_argument("--sortie", default="", help="defaut : parcelles_<proprietaire>.csv")
     ap.add_argument("--cache", default="cadastre_cache", help="dossier des fichiers cadastre Etalab")
     ap.add_argument("--sans-geo", action="store_true", help="ne pas calculer lat/lon")
     args = ap.parse_args()
 
-    liste = parcelles(lire_dgfip(args.zip))
+    sortie = args.sortie or f"parcelles_{args.proprietaire}.csv"
+    liste = parcelles(lire_dgfip(args.zip), PROFILS[args.proprietaire])
     if not args.sans_geo:
         geolocaliser(liste, args.cache)
 
@@ -230,18 +255,17 @@ def main():
                            "&l1=ORTHOIMAGERY.ORTHOPHOTOS::GEOPORTAIL:OGC:WMTS(1)&permalink=yes"
                            if lat else "")
     liste.sort(key=lambda p: (p["commune"], p["section"], p["numero"]))
-    with open(args.sortie, "w", newline="", encoding="utf-8-sig") as f:
+    with open(sortie, "w", newline="", encoding="utf-8-sig") as f:
         w = csv.DictWriter(f, fieldnames=champs, delimiter=";", extrasaction="ignore")
         w.writeheader()
         w.writerows(liste)
 
-    metro = sum(1 for p in liste if p["statut"] == "Metropole")
     surface = sum(p["contenance_m2"] for p in liste) / 10000
     geo = sum(1 for p in liste if p.get("latitude"))
-    print(f"\n{len(liste)} parcelles ({metro} au nom de la Metropole, "
-          f"{len(liste) - metro} au nom d'un ex-EPCI), {surface:,.0f} ha, "
-          f"{geo} localisees")
-    print(f"Fichier ecrit : {args.sortie}")
+    par_statut = Counter(p["statut"] for p in liste)
+    detail = ", ".join(f"{n} {st}" for st, n in par_statut.most_common())
+    print(f"\n{len(liste)} parcelles ({detail}), {surface:,.0f} ha, {geo} localisees")
+    print(f"Fichier ecrit : {sortie}")
 
 
 if __name__ == "__main__":

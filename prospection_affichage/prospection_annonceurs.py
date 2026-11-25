@@ -133,7 +133,7 @@ SECTEURS = {
     },
 }
 
-SIGNATURE = "Puissance 8\n07 68 76 67 99\ncontact@puissance8.com"
+SIGNATURE = "Jean-Roger Dargaud\n07 59 68 85 35\nPUISSANCE8\nwww.puissance8.com"
 
 PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_FIELDS = ",".join(

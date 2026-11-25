@@ -60,9 +60,10 @@ SECTEURS = {
         "rayon_km": 20,
         "priorite": 1,
         "accroche": (
-            "Pour la commercialisation de vos programmes, un panneau grand "
-            "format sur un axe local touche chaque jour les habitants du "
-            "secteur, ceux qui achètent dans le neuf à proximité."
+            "Pour faire connaître vos programmes et vos maisons, un panneau "
+            "grand format sur un axe local touche chaque jour les habitants du "
+            "secteur, ceux qui ont un projet d'achat ou de construction à "
+            "proximité."
         ),
     },
     "agence_immo": {
@@ -407,20 +408,28 @@ def description_panneau(p):
     if p["eclaire"].lower().startswith("oui"):
         morceaux.append("éclairé")
     lieu = re.sub(r",?\s*France$", "", (p["adresse"] or p["commune"]).strip())
+    # "situé RN113" -> "situé sur la RN113"
+    if re.match(r"(RN|N|RD|D|CD)\s?\d", lieu):
+        lieu = "sur la " + lieu
     texte = (
         f"panneau {', '.join(morceaux)} situé {lieu}"
         if morceaux
         else f"panneau situé {lieu}"
     )
     if p["sens"]:
-        sens = p["sens"].strip()
+        sens = re.sub(r"\s*\(visible[^)]*\)", "", p["sens"]).strip()
         if sens.lower().startswith("vers "):
-            texte += f", visible en direction de {sens[5:]}"
+            texte += f", visible en direction {_de(sens[5:])}"
         elif sens.lower().startswith("de "):
             texte += f", visible dans le sens {sens[0].lower() + sens[1:]}"
         else:
-            texte += f", visible en direction de {sens}"
+            texte += f", visible en direction {_de(sens)}"
     return texte
+
+
+def _de(lieu):
+    """French elision: 'de Aix' -> "d'Aix"."""
+    return ("d'" if lieu[:1].lower() in "aeiouyhéèêâ" else "de ") + lieu
 
 
 def rediger(prospect, panneau, secteur):

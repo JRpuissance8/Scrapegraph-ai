@@ -324,6 +324,14 @@ def _domaine(url):
 
 
 def chercher_email(site):
+    """Never let one broken website stop the whole run."""
+    try:
+        return _chercher_email(site)
+    except Exception as exc:  # malformed URLs, encoding errors, ...
+        return "", f"erreur site: {type(exc).__name__}"
+
+
+def _chercher_email(site):
     if not site:
         return "", ""
     if any(x in site for x in SITES_SANS_EMAIL):

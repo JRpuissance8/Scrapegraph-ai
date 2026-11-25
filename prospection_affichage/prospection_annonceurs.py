@@ -196,6 +196,12 @@ SITES_SANS_EMAIL = (
     "instagram.",
     "linktr.ee",
     "pagesjaunes.",
+    "booksy.",
+    "planity.",
+    "doctolib.",
+    "treatwell.",
+    "sites.google.",
+    "business.site",
 )
 EXT_IMAGE = (".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp")
 LIENS_CONTACT = re.compile(r"contact|mentions|legal|nous-joindre|a-propos", re.I)
@@ -400,7 +406,7 @@ def description_panneau(p):
         morceaux.append(f"{p['surface_m2']} m²")
     if p["eclaire"].lower().startswith("oui"):
         morceaux.append("éclairé")
-    lieu = p["adresse"] or p["commune"]
+    lieu = re.sub(r",?\s*France$", "", (p["adresse"] or p["commune"]).strip())
     texte = (
         f"panneau {', '.join(morceaux)} situé {lieu}"
         if morceaux
@@ -408,9 +414,12 @@ def description_panneau(p):
     )
     if p["sens"]:
         sens = p["sens"].strip()
-        if not sens.lower().startswith(("vers", "de ")):
-            sens = "vers " + sens
-        texte += f", visible dans le sens {sens[0].lower() + sens[1:]}"
+        if sens.lower().startswith("vers "):
+            texte += f", visible en direction de {sens[5:]}"
+        elif sens.lower().startswith("de "):
+            texte += f", visible dans le sens {sens[0].lower() + sens[1:]}"
+        else:
+            texte += f", visible en direction de {sens}"
     return texte
 
 
@@ -541,6 +550,10 @@ def main():
         for p in prospects:
             p["email"], p["note_email"] = "", ""
 
+    for p in prospects:
+        if p["email"] and any(x in p["site"] for x in SITES_SANS_EMAIL):
+            p["email"], p["note_email"] = "", "site plateforme, pas d'email direct"
+
     # 5. Draft messages and export
     prospects.sort(
         key=lambda p: (
@@ -572,7 +585,13 @@ def main():
         "place_id",
     ]
     lignes = []
+    emails_vus = set()
     for p in prospects:
+        # one email = one message: keep the best-ranked location only
+        if p["email"] in emails_vus:
+            continue
+        if p["email"]:
+            emails_vus.add(p["email"])
         pn = p["panneau"]
         s = SECTEURS[p["secteur"]]
         objet, corps = rediger(p, pn, s)
